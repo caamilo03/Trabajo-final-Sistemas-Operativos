@@ -1,0 +1,39 @@
+version: "3.9"
+
+x-app-base: &app-base
+  build:
+    context: ..
+    dockerfile: docker/Dockerfile.app
+  ports:
+    - "8080:8080"
+  read_only: false
+  security_opt:
+    - no-new-privileges:true
+
+services:
+
+  # Perfil 1: sin límites de recursos
+  baseline:
+    <<: *app-base
+    container_name: perf_baseline
+    profiles: ["baseline"]
+
+  # Perfil 2: limitado a 1 vCPU
+  cpu-limit:
+    <<: *app-base
+    container_name: perf_cpu_limit
+    profiles: ["cpu-limit"]
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+
+  # Perfil 3: limitado a 512 MiB de memoria
+  mem-limit:
+    <<: *app-base
+    container_name: perf_mem_limit
+    profiles: ["mem-limit"]
+    deploy:
+      resources:
+        limits:
+          memory: 512m

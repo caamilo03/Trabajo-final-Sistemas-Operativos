@@ -1,0 +1,2 @@
+Desarrollar una API que implemente diferentes mecanismos para analizar el rendimiento de una aplicación en un conjunto acotado de parámetros, tales como el uso de CPU, memoria y dispositivos de E/S, pero también el análisis del uso de recursos de una función determinada de la aplicación (creación de perfiles).
+Debe hacerse para evaluar el rendimiento de contenedores Docker.

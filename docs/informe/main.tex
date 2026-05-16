@@ -1,0 +1,366 @@
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage[spanish]{babel}
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  language=C,
+  keywordstyle=\color{blue},
+  commentstyle=\color{gray},
+}
+
+\begin{document}
+
+\title{perfanalyzer: Una API en C para el Análisis de Rendimiento\\
+de Contenedores Docker}
+
+\author{
+  \IEEEauthorblockN{Camilo Loaiza Hernández}
+  \IEEEauthorblockA{Facultad de Ingeniería\\
+  Universidad de Antioquia\\
+  Medellín, Colombia\\
+  camiloloaizah03@gmail.com}
+  \and
+  \IEEEauthorblockN{[Nombre compañero]}
+  \IEEEauthorblockA{Facultad de Ingeniería\\
+  Universidad de Antioquia\\
+  Medellín, Colombia\\
+  correo@udea.edu.co}
+}
+
+\maketitle
+
+% ─── Abstract ────────────────────────────────────────────────────────────────
+\begin{abstract}
+Este artículo presenta \textit{perfanalyzer}, una API implementada en C que
+expone métricas de CPU, memoria y E/S de procesos tanto desde dentro de un
+contenedor Docker (vía \texttt{/proc}) como desde el host (vía cgroup v2). La
+API incluye un servidor HTTP/REST y un sistema de \textit{profiling} por función
+instrumentado con macros. Se realizó un diseño experimental con $n=30$ réplicas
+por celda evaluando tres tipos de carga de trabajo (CPU, memoria, E/S) bajo
+tres configuraciones de contenedor y modo host, con análisis estadístico
+(Welch t-test / Mann-Whitney, IC 95\%, Cohen's d). Los resultados muestran
+[COMPLETAR CON RESULTADOS REALES].
+\end{abstract}
+
+\begin{IEEEkeywords}
+Docker, cgroup v2, rendimiento, profiling, API REST, C, análisis estadístico
+\end{IEEEkeywords}
+
+% ─── I. Introducción ─────────────────────────────────────────────────────────
+\section{Introducción}
+
+Los contenedores han transformado el despliegue de software al ofrecer
+aislamiento ligero y reproducibilidad. Sin embargo, el análisis de su
+rendimiento presenta desafíos específicos: las herramientas tradicionales
+como \texttt{perf} o \texttt{gprof} no tienen visibilidad directa de los
+límites impuestos por el scheduler y la jerarquía de control de grupos
+(\textit{cgroups}) \cite{sobieraj2024docker}.
+
+La motivación de este proyecto es construir una herramienta de propósito
+educativo e investigativo que: (a) sea implementada en lenguaje C sobre Linux,
+sin dependencias de alto nivel; (b) use exclusivamente las interfaces del kernel
+(\texttt{/proc}, cgroup v2) para obtener métricas; (c) las exponga a través de
+una API REST; y (d) permita \textit{profiling} por función con sobrecarga mínima.
+
+La metodología consiste en diseñar la librería \textit{perfanalyzer},
+instrumentar tres cargas de trabajo representativas y comparar su rendimiento
+en host versus tres configuraciones de Docker, validando estadísticamente las
+diferencias observadas.
+
+% ─── II. Marco Teórico ───────────────────────────────────────────────────────
+\section{Marco Teórico}
+
+\subsection{cgroup v2 y aislamiento de recursos}
+
+El subsistema \textit{control groups} (cgroups) v2, estabilizado en Linux 4.5,
+organiza los procesos en una jerarquía unificada bajo
+\texttt{/sys/fs/cgroup}. Cada cgroup expone archivos como
+\texttt{cpu.stat} (tiempo de CPU), \texttt{memory.current} y
+\texttt{memory.peak} (uso de memoria) e \texttt{io.stat} (bytes por
+dispositivo) \cite{docker2022monitor}.
+
+Docker utiliza cgroups para implementar los límites de \texttt{--cpus} y
+\texttt{--memory}. Un contenedor con \texttt{--cpus=1} tiene su tiempo de CPU
+restringido por el parámetro \texttt{cpu.max} del cgroup, lo que reduce el
+\textit{throughput} de cargas CPU-intensivas.
+
+\subsection{Profiling por función en espacio de usuario}
+
+El \textit{profiling} de alta resolución en espacio de usuario se realiza
+con \texttt{clock\_gettime(CLOCK\_MONO\-TONIC\_RAW)}, que es inmune al ajuste
+NTP \cite{intel2024profiling}. La combinación con \texttt{getrusage(RUSAGE\_THREAD)}
+permite aislar el tiempo de CPU consumido específicamente por el hilo del
+\textit{probe}, separando el tiempo de E/S y espera.
+
+\subsection{Métodos estadísticos}
+
+Para comparar dos distribuciones se aplica primero la prueba de normalidad
+Shapiro-Wilk (adecuada para $n \leq 5000$) \cite{ieee2024performance}. Si ambas
+distribuciones son normales se usa la t de Welch (no asume varianzas iguales);
+en caso contrario, Mann-Whitney U (no paramétrica). El tamaño del efecto se
+reporta como Cohen's $d$ o $r$ de rango biserial. Los intervalos de confianza
+al 95\% se calculan por bootstrap ($n = 2000$ remuestras).
+
+% ─── III. Metodología ────────────────────────────────────────────────────────
+\section{Metodología}
+
+El proyecto siguió un proceso iterativo de cuatro etapas: (1) diseño de la
+arquitectura y la API pública; (2) implementación de los módulos de muestreo
+y profiling; (3) implementación del servidor HTTP/REST; (4) diseño y ejecución
+del experimento con análisis estadístico.
+
+El entorno de desarrollo fue Windows 11 con VSCode y Claude Code como
+asistente; el entorno de ejecución y pruebas fue una VM Ubuntu 24.04 LTS
+con cgroup v2 nativo, Docker 24+ y GCC 11.
+
+% ─── IV. Implementación ──────────────────────────────────────────────────────
+\section{Implementación}
+
+\subsection{Arquitectura general}
+
+\textit{perfanalyzer} se estructura en tres componentes (Figura~\ref{fig:arch}):
+
+\begin{enumerate}
+  \item \textbf{libperfanalyzer}: librería estática con los módulos de muestreo
+    (\texttt{sampler\_cpu}, \texttt{sampler\_mem}, \texttt{sampler\_io},
+    \texttt{sampler\_cgroup}), el profiler (\texttt{profiler.c}) y el exportador
+    JSON (\texttt{exporter\_json.c}).
+  \item \textbf{perfanalyzer\_server}: daemon HTTP/REST que expone ocho
+    endpoints sobre la librería.
+  \item \textbf{perfctl}: cliente CLI para interactuar con el servidor o tomar
+    muestras directas.
+\end{enumerate}
+
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\columnwidth]{arch.pdf}
+  \fbox{\parbox{0.9\columnwidth}{\centering
+    [Figura de arquitectura — agregar diagrama]}}
+  \caption{Arquitectura de perfanalyzer.}
+  \label{fig:arch}
+\end{figure}
+
+\subsection{Módulos de muestreo}
+
+\textbf{CPU}: Se leen \texttt{/proc/self/stat} y \texttt{/proc/stat} en dos
+instantes sucesivos. El porcentaje de CPU del proceso se calcula como:
+\begin{equation}
+  \%\mathrm{CPU} = \frac{\Delta(\mathit{utime} + \mathit{stime}) / \mathit{ticks\_per\_s}}
+                        {\Delta t_{\mathrm{wall}}} \times 100
+\end{equation}
+
+\textbf{Memoria}: Se parsea \texttt{/proc/self/status} buscando
+\texttt{VmRSS}, \texttt{VmSize} y \texttt{VmPeak}.
+
+\textbf{E/S}: Se lee \texttt{/proc/self/io} para obtener
+\texttt{read\_bytes}, \texttt{write\_bytes}, \texttt{syscr} y \texttt{syscw}.
+
+\textbf{cgroup v2}: El path propio se detecta leyendo \texttt{/proc/self/cgroup}
+(línea \texttt{0::}). Luego se leen \texttt{cpu.stat}, \texttt{memory.current},
+\texttt{memory.peak} e \texttt{io.stat}.
+
+\subsection{Profiler por función}
+
+La macro \texttt{PERF\_PROBE(ctx, "nombre")} usa
+\texttt{\_\_attribute\_\_((cleanup))} para garantizar que \texttt{perf\_probe\_end}
+se invoque aun ante retornos anticipados:
+
+\begin{lstlisting}
+PERF_PROBE(ctx, "matmul") {
+    matmul(C, A, B, n);
+}
+\end{lstlisting}
+
+Los percentiles se estiman por \textit{reservoir sampling} (Algorithm R de
+Vitter, $k = 1024$) para mantener uso de memoria constante.
+
+\subsection{Servidor HTTP/REST}
+
+El servidor implementa un parser HTTP/1.1 mínimo con un hilo por conexión
+(detached). Los endpoints principales son:
+
+\begin{itemize}
+  \item \texttt{GET /snapshot} — muestra puntual.
+  \item \texttt{POST /recording/\{start,stop\}} — serie temporal.
+  \item \texttt{GET /probes} — estadísticas de sondas.
+\end{itemize}
+
+La respuesta es siempre JSON plano generado sin dependencias externas.
+
+\subsection{Cargas de trabajo}
+
+Se implementaron tres cargas instrumentadas con \texttt{PERF\_PROBE}:
+\textbf{cpu\_stress} (multiplicación de matrices $N \times N$ + SHA-256),
+\textbf{mem\_stress} (alloc/touch/free + stride walk) e
+\textbf{io\_stress} (escritura y lectura secuencial y aleatoria de archivos).
+Cada una acepta \texttt{--intensity 1|2} y \texttt{--duration S}.
+
+% ─── V. Protocolo de Experimentación ─────────────────────────────────────────
+\section{Protocolo de Experimentación}
+
+\subsection{Variables}
+
+\textbf{Independientes}: entorno (\textit{host}, \textit{docker:baseline},
+\textit{docker:cpu-limit}, \textit{docker:mem-limit}); tipo de carga (CPU,
+Mem, IO); intensidad (1=baja, 2=alta).
+
+\textbf{Dependientes}: CPU promedio (\%), RSS promedio (kB), bytes de E/S,
+latencia p99 de sonda (µs), \textit{throughput} (iteraciones en 10 s).
+
+\subsection{Diseño}
+
+$n = 30$ réplicas por celda; 2 corridas de calentamiento descartadas;
+orden aleatorizado dentro de cada bloque. El experimento se automatizó con
+\texttt{run\_experiment.sh}.
+
+\subsection{Validación cruzada}
+
+Para validar la precisión de los samplers se comparó:
+\texttt{/snapshot} (interno) vs.\ \texttt{docker stats} (host) vs.\ cgroup
+desde el host. La diferencia relativa admisible es $< 5\%$ en CPU promedio.
+
+\subsection{Herramientas}
+
+\texttt{GCC 11} + CMake + ASan/UBSan (correctness), \texttt{valgrind}
+(fugas de memoria), Python + NumPy/SciPy/pandas/matplotlib (análisis).
+La elección de Python para análisis se justifica por la disponibilidad de
+\texttt{scipy.stats} con implementaciones validadas de los tests estadísticos.
+
+% ─── VI. Resultados ───────────────────────────────────────────────────────────
+\section{Resultados}
+
+% ⚠️ COMPLETAR con datos reales del experimento.
+% Sustituir los valores de ejemplo por los del CSV.
+
+\subsection{Overhead del sampler}
+
+La diferencia de CPU promedio entre la misma carga con y sin sampler activo
+fue de $\Delta\mu = \mathbf{X.X\%}$ (IC 95\%: [$a$, $b$]), lo que indica
+un overhead [despreciable / moderado].
+
+\subsection{CPU-stress: host vs. Docker}
+
+La Tabla~\ref{tab:cpu} muestra los resultados para \texttt{cpu\_stress}
+con intensidad alta. [COMPLETAR]
+
+\begin{table}[h]
+  \centering
+  \caption{CPU promedio (\%) — cpu\_stress (intensidad alta, n=30)}
+  \label{tab:cpu}
+  \begin{tabular}{lcccc}
+    \toprule
+    Entorno & Media & IC 95\% & Test & p-valor \\
+    \midrule
+    host           & -- & [--,--] & -- & -- \\
+    docker:baseline & -- & [--,--] & Welch & -- \\
+    docker:cpu-limit & -- & [--,--] & Welch & -- \\
+    docker:mem-limit & -- & [--,--] & Welch & -- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Memoria y E/S}
+
+[COMPLETAR con tablas y figuras de mem\_stress e io\_stress.]
+
+\subsection{Figuras}
+
+\begin{figure}[h]
+  \centering
+  % \includegraphics[width=\columnwidth]{figures/boxplot_cpu_pct_avg.png}
+  \fbox{\parbox{0.9\columnwidth}{\centering
+    [Boxplot CPU — agregar figura del experimento]}}
+  \caption{Distribución de CPU promedio por entorno y carga.}
+  \label{fig:boxplot_cpu}
+\end{figure}
+
+% ─── VII. Conclusiones ────────────────────────────────────────────────────────
+\section{Conclusiones}
+
+[COMPLETAR tras obtener resultados.]
+
+Entre las lecciones generales:
+\begin{itemize}
+  \item La lectura de \texttt{/proc} introduce latencia de orden $O(\mu s)$ por
+    muestra, lo que es admisible para períodos $\geq 10\,\mathrm{ms}$.
+  \item cgroup v2 provee métricas más consistentes que \texttt{/proc} bajo
+    contenedores con límites de CPU, pues el scheduler los aplica a nivel del
+    cgroup.
+  \item El \textit{reservoir sampling} con $k=1024$ estima percentiles con
+    error $< 5\%$ para $n \geq 30$.
+\end{itemize}
+
+% ─── Referencias ─────────────────────────────────────────────────────────────
+\begin{thebibliography}{9}
+
+\bibitem{sobieraj2024docker}
+M. Sobieraj y D. Kotynski,
+``Docker performance evaluation across operating systems,''
+\emph{Applied Sciences}, vol. 14, no. 15, p. 6672, 2024.
+\url{https://doi.org/10.3390/app14156672}
+
+\bibitem{docker2022monitor}
+Docker Inc.,
+``How to monitor container memory and CPU usage in Docker Desktop,''
+Docker Blog, 2022.
+\url{https://www.docker.com/blog/how-to-monitor-container-memory-and-cpu-usage-in-docker-desktop/}
+
+\bibitem{intel2024profiling}
+Intel,
+``Profiling Docker containers,''
+Intel VTune Profiler Cookbook 2024.
+\url{https://www.intel.com/content/www/us/en/docs/vtune-profiler/cookbook/2024-1/profiling-in-docker-container.html}
+
+\bibitem{ieee2024performance}
+IEEE,
+``Performance analysis of container technologies for computer systems,''
+\emph{IEEE Xplore}, 2024.
+\url{https://ieeexplore.ieee.org/document/10466754/}
+
+\bibitem{ieee2024linux}
+IEEE,
+``Performance of Docker containerization tool on different Linux distributions,''
+\emph{IEEE Xplore}, 2024.
+\url{https://ieeexplore.ieee.org/document/10496034/}
+
+\bibitem{ieee2023arm}
+IEEE,
+``Benchmarking container technologies on ARM-based edge devices,''
+\emph{IEEE Xplore}, 2023.
+\url{https://ieeexplore.ieee.org/document/10268421/}
+
+\bibitem{arxiv2024vm}
+arXiv,
+``Experimental assessment of containers running on top of virtual machines,''
+2024.
+\url{https://arxiv.org/abs/2401.07539}
+
+\bibitem{scidir2024redb}
+ScienceDirect,
+``REDB: Real-time enhancement of Docker containers via memory,''
+\emph{Journal of Systems Architecture}, 2024.
+\url{https://www.sciencedirect.com/science/article/abs/pii/S1383762124000729}
+
+\bibitem{scidir2023leakage}
+ScienceDirect,
+``A framework for evaluating information leakages of Docker containers,''
+\emph{SoftwareX}, 2023.
+\url{https://www.sciencedirect.com/science/article/pii/S2352711023002728}
+
+\end{thebibliography}
+
+\end{document}

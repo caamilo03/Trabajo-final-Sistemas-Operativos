@@ -1,0 +1,21 @@
+# Forzar LF en Linux para evitar CRLF en scripts y fuentes C
+* text=auto
+
+*.c     text eol=lf
+*.h     text eol=lf
+*.sh    text eol=lf
+*.py    text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+*.cmake text eol=lf
+*.tex   text eol=lf
+*.json  text eol=lf
+Dockerfile*       text eol=lf
+docker-compose*   text eol=lf
+Makefile          text eol=lf
+CMakeLists.txt    text eol=lf
+
+*.png   binary
+*.jpg   binary
+*.pdf   binary
+*.docx  binary

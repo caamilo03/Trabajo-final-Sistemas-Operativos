@@ -126,7 +126,9 @@ int main(int argc, char *argv[])
     perf_ctx_t *ctx = perf_init(&cfg);
     if (!ctx) { fprintf(stderr, "perf_init falló\n"); return 1; }
 
+#ifndef PERF_DISABLE_SAMPLING
     perf_start_recording(ctx);
+#endif
 
     int mat_n = (intensity >= 2) ? MAT_N : MAT_N / 2;
     double *A = calloc((size_t)(mat_n * mat_n), sizeof(double));
@@ -171,8 +173,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    perf_series_t series;
+    perf_series_t series = {0};
+#ifndef PERF_DISABLE_SAMPLING
     perf_stop_recording(ctx, &series);
+#endif
 
     /* Imprimir resumen a stdout (CSV) */
     printf("workload,cpu_stress\n");
@@ -187,17 +191,22 @@ int main(int argc, char *argv[])
         printf("cpu_pct_avg,%.2f\n", cpu_sum / (double)series.count);
     }
 
-    /* Reporte de sondas */
+    /* Reporte de sondas (vacío si PERF_DISABLE_SAMPLING) */
     size_t np = 0;
     perf_probe_report(ctx, NULL, &np);
-    perf_probe_stats_t *ps = malloc(np * sizeof(*ps));
-    perf_probe_report(ctx, ps, &np);
-    for (size_t i = 0; i < np; i++) {
-        printf("probe_%s_avg_us,%.2f\n", ps[i].name, ps[i].elapsed_us_avg);
-        printf("probe_%s_p99_us,%.2f\n", ps[i].name, ps[i].elapsed_us_p99);
-        printf("probe_%s_count,%llu\n",  ps[i].name, (unsigned long long)ps[i].count);
+    if (np > 0) {
+        perf_probe_stats_t *ps = malloc(np * sizeof(*ps));
+        if (ps) {
+            perf_probe_report(ctx, ps, &np);
+            for (size_t i = 0; i < np; i++) {
+                printf("probe_%s_avg_us,%.2f\n", ps[i].name, ps[i].elapsed_us_avg);
+                printf("probe_%s_p99_us,%.2f\n", ps[i].name, ps[i].elapsed_us_p99);
+                printf("probe_%s_count,%llu\n",  ps[i].name,
+                       (unsigned long long)ps[i].count);
+            }
+            free(ps);
+        }
     }
-    free(ps);
     free(A); free(B); free(C);
     perf_series_free(&series);
     perf_shutdown(ctx);

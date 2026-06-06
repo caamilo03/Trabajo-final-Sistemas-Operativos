@@ -35,20 +35,26 @@ static perf_status_t read_proc_self_stat(const char *proc_root,
     p += 2; /* saltar ') ' */
 
     /* fields 3..13 que no nos interesan (estado, ppid, pgrp, session,
-     * tty_nr, tpgid, flags, minflt, cminflt, majflt, cmajflt) */
+     * tty_nr, tpgid, flags, minflt, cminflt, majflt, cmajflt).
+     * Usamos variables locales unsigned long long para evitar warnings
+     * de %llu cuando uint64_t es unsigned long en glibc/x86_64. */
     unsigned long long dummy;
+    unsigned long long utime_ull, stime_ull;
     char state;
     int scanned = sscanf(p,
-        "%c "           /* 3: state  */
-        "%llu %llu %llu %llu %llu "   /* 4-8  */
-        "%llu %llu %llu %llu %llu "   /* 9-13 */
+        "%c "                          /* 3: state             */
+        "%llu %llu %llu %llu %llu "    /* 4-8                  */
+        "%llu %llu %llu %llu %llu "    /* 9-13                 */
         "%llu %llu",                   /* 14: utime, 15: stime */
         &state,
         &dummy, &dummy, &dummy, &dummy, &dummy,
         &dummy, &dummy, &dummy, &dummy, &dummy,
-        utime_ticks, stime_ticks);
+        &utime_ull, &stime_ull);
 
-    return (scanned == 13) ? PERF_OK : PERF_ERR_IO;
+    if (scanned != 13) return PERF_ERR_IO;
+    *utime_ticks = (uint64_t)utime_ull;
+    *stime_ticks = (uint64_t)stime_ull;
+    return PERF_OK;
 }
 
 /*

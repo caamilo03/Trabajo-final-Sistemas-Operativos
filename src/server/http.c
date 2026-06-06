@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <strings.h>      /* strcasecmp */
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/socket.h>

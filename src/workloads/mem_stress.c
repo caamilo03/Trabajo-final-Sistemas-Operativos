@@ -44,7 +44,9 @@ int main(int argc, char *argv[])
     perf_ctx_t *ctx = perf_init(&cfg);
     if (!ctx) { fprintf(stderr, "perf_init falló\n"); return 1; }
 
+#ifndef PERF_DISABLE_SAMPLING
     perf_start_recording(ctx);
+#endif
 
     struct timespec t_end;
     clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -83,8 +85,10 @@ int main(int argc, char *argv[])
         }
     }
 
-    perf_series_t series;
+    perf_series_t series = {0};
+#ifndef PERF_DISABLE_SAMPLING
     perf_stop_recording(ctx, &series);
+#endif
 
     printf("workload,mem_stress\n");
     printf("alloc_iters,%llu\n", (unsigned long long)alloc_iters);
@@ -102,13 +106,17 @@ int main(int argc, char *argv[])
 
     size_t np = 0;
     perf_probe_report(ctx, NULL, &np);
-    perf_probe_stats_t *ps = malloc(np * sizeof(*ps));
-    perf_probe_report(ctx, ps, &np);
-    for (size_t i = 0; i < np; i++) {
-        printf("probe_%s_avg_us,%.2f\n", ps[i].name, ps[i].elapsed_us_avg);
-        printf("probe_%s_p99_us,%.2f\n", ps[i].name, ps[i].elapsed_us_p99);
+    if (np > 0) {
+        perf_probe_stats_t *ps = malloc(np * sizeof(*ps));
+        if (ps) {
+            perf_probe_report(ctx, ps, &np);
+            for (size_t i = 0; i < np; i++) {
+                printf("probe_%s_avg_us,%.2f\n", ps[i].name, ps[i].elapsed_us_avg);
+                printf("probe_%s_p99_us,%.2f\n", ps[i].name, ps[i].elapsed_us_p99);
+            }
+            free(ps);
+        }
     }
-    free(ps);
     perf_series_free(&series);
     perf_shutdown(ctx);
     return 0;

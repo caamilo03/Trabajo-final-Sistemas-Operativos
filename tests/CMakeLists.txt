@@ -1,6 +1,15 @@
 enable_testing()
 
-# Framework de tests: Unity (un solo .c, embebido)
+# Framework de tests: Unity (descargado por scripts/setup_deps.sh)
+# Si no está presente, omitimos los tests con un mensaje claro.
+if(NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/unity/unity.c")
+    message(WARNING
+        "Unity test framework no encontrado en tests/unity/. "
+        "Ejecuta 'scripts/setup_deps.sh' para descargarlo. "
+        "Los tests no se construirán.")
+    return()
+endif()
+
 add_library(unity STATIC unity/unity.c)
 target_include_directories(unity PUBLIC unity)
 

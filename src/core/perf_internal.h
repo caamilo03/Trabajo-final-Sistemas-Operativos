@@ -94,6 +94,7 @@ typedef struct {
     /* reservoir sampling para percentiles */
     double   reservoir[RESERVOIR_SIZE];
     size_t   res_count;
+    unsigned rng_state;       /* semilla por entrada para rand_r() */
     pthread_mutex_t mu;
 } probe_entry_t;
 
@@ -124,6 +125,9 @@ struct perf_ctx {
     volatile int    sampler_running;
     ring_buffer_t   ring;
 
+    /* prev_cpu se actualiza desde varios hilos (sampler de fondo,
+     * handlers /snapshot, perf_probe_*) por lo que requiere mutex. */
+    pthread_mutex_t sample_mu;
     cpu_snapshot_t  prev_cpu;
     int             prev_cpu_valid;
 

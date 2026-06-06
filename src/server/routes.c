@@ -2,12 +2,50 @@
 #include "routes.h"
 #include "http.h"
 #include "perf.h"
+#include "dashboard.h"
 
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <pthread.h>
 
-#define JSON_BUF_SIZE (1024 * 1024)   /* 1 MiB para series largas */
+#define JSON_BUF_SIZE (4 * 1024 * 1024)   /* 4 MiB para series largas (4096 muestras × ~600 B) */
+
+/* ── Tabla de sesiones de probe activas ─────────────────────────────────────
+ * Cuando un cliente HTTP llama /probe/begin almacenamos el probe_t en una
+ * tabla indexada por nombre. /probe/end busca por nombre y cierra el probe,
+ * registrando la duración en la tabla de sondas del ctx. */
+#define MAX_ACTIVE_PROBES 64
+
+typedef struct {
+    char         name[128];
+    perf_probe_t probe;
+    int          in_use;
+} active_probe_t;
+
+static active_probe_t g_active[MAX_ACTIVE_PROBES];
+static pthread_mutex_t g_active_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static active_probe_t *active_find(const char *name)
+{
+    for (size_t i = 0; i < MAX_ACTIVE_PROBES; i++)
+        if (g_active[i].in_use && strcmp(g_active[i].name, name) == 0)
+            return &g_active[i];
+    return NULL;
+}
+
+static active_probe_t *active_alloc(const char *name)
+{
+    for (size_t i = 0; i < MAX_ACTIVE_PROBES; i++) {
+        if (!g_active[i].in_use) {
+            g_active[i].in_use = 1;
+            strncpy(g_active[i].name, name, sizeof(g_active[i].name) - 1);
+            g_active[i].name[sizeof(g_active[i].name) - 1] = '\0';
+            return &g_active[i];
+        }
+    }
+    return NULL;
+}
 
 /* ── GET /health ─────────────────────────────────────────────────────────── */
 static void handle_health(int fd)
@@ -81,32 +119,50 @@ static void handle_recording_stop(perf_ctx_t *ctx, int fd)
     perf_series_free(&series);
 }
 
+/* Extrae el campo "name" de un cuerpo JSON simple: {"name":"<valor>"} */
+static int extract_json_name(const char *body, char *out, size_t outsz)
+{
+    const char *p = strstr(body, "\"name\"");
+    if (!p) return -1;
+    p = strchr(p, ':');
+    if (!p) return -1;
+    p++;
+    while (*p == ' ' || *p == '"') p++;
+    size_t i = 0;
+    while (*p && *p != '"' && i < outsz - 1)
+        out[i++] = *p++;
+    out[i] = '\0';
+    return (i > 0) ? 0 : -1;
+}
+
 /* ── POST /probe/begin ───────────────────────────────────────────────────── */
 static void handle_probe_begin(perf_ctx_t *ctx,
                                 const http_request_t *req, int fd)
 {
-    /* Extraer "name" del body JSON: {"name":"fn_name"} */
-    char name[128] = "unnamed";
-    const char *p = strstr(req->body, "\"name\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) {
-            p++;
-            while (*p == ' ' || *p == '"') p++;
-            size_t i = 0;
-            while (*p && *p != '"' && i < sizeof(name) - 1)
-                name[i++] = *p++;
-            name[i] = '\0';
-        }
+    char name[128];
+    if (extract_json_name(req->body, name, sizeof(name)) != 0) {
+        http_send_error(fd, 400, "missing 'name' in body");
+        return;
     }
 
-    /* Guardamos la sonda en un contexto temporal por-conexión (no ideal para
-     * múltiples clientes; suficiente para el caso de uso de un workload). */
-    perf_probe_t probe = perf_probe_begin(ctx, name);
-    (void)probe; /* La macro PERF_PROBE no aplica aquí; usamos begin/end manual */
+    pthread_mutex_lock(&g_active_mu);
+    if (active_find(name)) {
+        pthread_mutex_unlock(&g_active_mu);
+        http_send_error(fd, 409, "probe already active");
+        return;
+    }
+    active_probe_t *slot = active_alloc(name);
+    if (!slot) {
+        pthread_mutex_unlock(&g_active_mu);
+        http_send_error(fd, 500, "too many active probes");
+        return;
+    }
+    slot->probe = perf_probe_begin(ctx, slot->name);
+    pthread_mutex_unlock(&g_active_mu);
 
     char resp[256];
-    snprintf(resp, sizeof(resp), "{\"probe_name\":\"%s\",\"status\":\"started\"}", name);
+    snprintf(resp, sizeof(resp),
+             "{\"probe_name\":\"%s\",\"status\":\"started\"}", name);
     http_send_json(fd, 202, resp);
 }
 
@@ -114,30 +170,25 @@ static void handle_probe_begin(perf_ctx_t *ctx,
 static void handle_probe_end(perf_ctx_t *ctx,
                               const http_request_t *req, int fd)
 {
-    /* Extraer "name" del body JSON */
-    char name[128] = "unnamed";
-    const char *p = strstr(req->body, "\"name\"");
-    if (p) {
-        p = strchr(p, ':');
-        if (p) {
-            p++;
-            while (*p == ' ' || *p == '"') p++;
-            size_t i = 0;
-            while (*p && *p != '"' && i < sizeof(name) - 1)
-                name[i++] = *p++;
-            name[i] = '\0';
-        }
+    (void)ctx;
+    char name[128];
+    if (extract_json_name(req->body, name, sizeof(name)) != 0) {
+        http_send_error(fd, 400, "missing 'name' in body");
+        return;
     }
 
-    /* Tomamos muestra final usando perf_probe_begin + end en el servidor;
-     * esto registra un intervalo de duración ~0 (para el endpoint REST).
-     * El uso real de /probe/begin+end es para workloads que corren
-     * independientemente y reportan sus stats vía /probes. */
-    perf_probe_t probe = perf_probe_begin(ctx, name);
-    perf_probe_end(&probe);
+    pthread_mutex_lock(&g_active_mu);
+    active_probe_t *slot = active_find(name);
+    if (!slot) {
+        pthread_mutex_unlock(&g_active_mu);
+        http_send_error(fd, 404, "probe not active");
+        return;
+    }
+    perf_probe_end(&slot->probe);
+    slot->in_use = 0;
+    pthread_mutex_unlock(&g_active_mu);
 
     http_send_json(fd, 200, "{\"status\":\"recorded\"}");
-    (void)req;
 }
 
 /* ── GET /probes ─────────────────────────────────────────────────────────── */
@@ -162,13 +213,30 @@ static void handle_probe_reset(perf_ctx_t *ctx, int fd)
     http_send_json(fd, 200, "{\"status\":\"reset\"}");
 }
 
+/* ── GET /dashboard ──────────────────────────────────────────────────────── */
+static void handle_dashboard(int fd)
+{
+    const char *html = dashboard_html();
+    http_response_t resp = {
+        .status   = 200,
+        .body     = (char *)html,
+        .body_len = strlen(html),
+    };
+    strncpy(resp.content_type, "text/html; charset=utf-8",
+            sizeof(resp.content_type) - 1);
+    http_send(fd, &resp);
+}
+
 /* ── Dispatcher ──────────────────────────────────────────────────────────── */
 
 void routes_dispatch(perf_ctx_t *ctx, const http_request_t *req, int fd)
 {
     const char *path = req->path;
 
-    if (req->method == HTTP_GET && strcmp(path, "/health") == 0) {
+    if (req->method == HTTP_GET &&
+        (strcmp(path, "/dashboard") == 0 || strcmp(path, "/") == 0)) {
+        handle_dashboard(fd);
+    } else if (req->method == HTTP_GET && strcmp(path, "/health") == 0) {
         handle_health(fd);
     } else if (req->method == HTTP_GET && strcmp(path, "/snapshot") == 0) {
         handle_snapshot(ctx, fd);

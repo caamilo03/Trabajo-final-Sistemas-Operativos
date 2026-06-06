@@ -15,6 +15,7 @@
 
 static int write_file(perf_ctx_t *ctx, const char *path, size_t total_mb)
 {
+    (void)ctx;  /* usado por PERF_PROBE; silencia warning si está deshabilitado */
     char *buf = malloc(BLOCK_SIZE);
     if (!buf) return -1;
     memset(buf, 0xAB, BLOCK_SIZE);
@@ -42,6 +43,7 @@ static int write_file(perf_ctx_t *ctx, const char *path, size_t total_mb)
 
 static uint64_t read_sequential(perf_ctx_t *ctx, const char *path)
 {
+    (void)ctx;
     char *buf = malloc(BLOCK_SIZE);
     if (!buf) return 0;
     int fd = open(path, O_RDONLY);
@@ -63,6 +65,7 @@ static uint64_t read_sequential(perf_ctx_t *ctx, const char *path)
 static uint64_t read_random(perf_ctx_t *ctx, const char *path,
                               off_t file_size, int nreads)
 {
+    (void)ctx;
     char *buf = malloc(BLOCK_SIZE);
     if (!buf) return 0;
     int fd = open(path, O_RDONLY);
@@ -110,7 +113,9 @@ int main(int argc, char *argv[])
     perf_ctx_t *ctx = perf_init(&cfg);
     if (!ctx) { fprintf(stderr, "perf_init falló\n"); return 1; }
 
+#ifndef PERF_DISABLE_SAMPLING
     perf_start_recording(ctx);
+#endif
 
     struct timespec t_end;
     clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -137,8 +142,10 @@ int main(int argc, char *argv[])
 
     unlink(tmpfile);
 
-    perf_series_t series;
+    perf_series_t series = {0};
+#ifndef PERF_DISABLE_SAMPLING
     perf_stop_recording(ctx, &series);
+#endif
 
     printf("workload,io_stress\n");
     printf("iters,%llu\n",     (unsigned long long)iters);
@@ -157,13 +164,17 @@ int main(int argc, char *argv[])
 
     size_t np = 0;
     perf_probe_report(ctx, NULL, &np);
-    perf_probe_stats_t *ps = malloc(np * sizeof(*ps));
-    perf_probe_report(ctx, ps, &np);
-    for (size_t i = 0; i < np; i++) {
-        printf("probe_%s_avg_us,%.2f\n", ps[i].name, ps[i].elapsed_us_avg);
-        printf("probe_%s_p99_us,%.2f\n", ps[i].name, ps[i].elapsed_us_p99);
+    if (np > 0) {
+        perf_probe_stats_t *ps = malloc(np * sizeof(*ps));
+        if (ps) {
+            perf_probe_report(ctx, ps, &np);
+            for (size_t i = 0; i < np; i++) {
+                printf("probe_%s_avg_us,%.2f\n", ps[i].name, ps[i].elapsed_us_avg);
+                printf("probe_%s_p99_us,%.2f\n", ps[i].name, ps[i].elapsed_us_p99);
+            }
+            free(ps);
+        }
     }
-    free(ps);
     perf_series_free(&series);
     perf_shutdown(ctx);
     return 0;

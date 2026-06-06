@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# measure_overhead.sh — Cuantifica el overhead de libperfanalyzer
+#
+# Ejecuta cada workload N réplicas en dos modos:
+#   - with_sampler:   PERF_PROBE activo + sampler de fondo
+#   - no_sampler:     mismo binario compilado con -DPERF_DISABLE_SAMPLING
+#                     (la macro PERF_PROBE se vuelve no-op)
+# Compara el throughput entre ambos para reportar el % de overhead.
+#
+# Uso:
+#   chmod +x experiments/measure_overhead.sh
+#   experiments/measure_overhead.sh [--replicas N] [--duration S]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+BUILD="$ROOT_DIR/build-release"
+RESULTS="$SCRIPT_DIR/results"
+
+REPLICAS=15
+DURATION=10
+TS=$(date +%Y%m%d_%H%M%S)
+OUT="$RESULTS/overhead_${TS}.csv"
+
+GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
+log() { echo -e "${GREEN}[overhead]${NC} $*"; }
+die() { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --replicas) REPLICAS="$2"; shift 2 ;;
+        --duration) DURATION="$2"; shift 2 ;;
+        *) echo "Uso: $0 [--replicas N] [--duration S]"; exit 1 ;;
+    esac
+done
+
+mkdir -p "$RESULTS"
+echo "workload,intensity,mode,replica,throughput,cpu_pct_avg" > "$OUT"
+
+parse_output() {
+    local file="$1"
+    local throughput cpu_avg
+    throughput=$(grep -E '^(matmul_iters|alloc_iters|iters),' "$file" \
+                 | head -1 | cut -d, -f2 || echo 0)
+    cpu_avg=$(grep    '^cpu_pct_avg,' "$file" | cut -d, -f2 || echo 0)
+    echo "${throughput},${cpu_avg}"
+}
+
+# Verificar binarios
+for wl in cpu_stress mem_stress io_stress; do
+    [[ -x "$BUILD/src/workloads/${wl}" ]]            || die "Falta ${wl}. Ejecuta 'make release'."
+    [[ -x "$BUILD/src/workloads/${wl}_nosampler" ]]  || die "Falta ${wl}_nosampler. Ejecuta 'make release'."
+done
+
+for wl in cpu_stress mem_stress io_stress; do
+    for inten in 1 2; do
+        for mode in with_sampler no_sampler; do
+            if [[ "$mode" == "with_sampler" ]]; then
+                bin="$BUILD/src/workloads/$wl"
+            else
+                bin="$BUILD/src/workloads/${wl}_nosampler"
+            fi
+
+            log "── $wl inten=$inten mode=$mode ──"
+            for rep in $(seq 1 "$REPLICAS"); do
+                tmpf=$(mktemp)
+                "$bin" --duration "$DURATION" --intensity "$inten" \
+                    > "$tmpf" 2>/dev/null
+                vals=$(parse_output "$tmpf")
+                echo "$wl,$inten,$mode,$rep,$vals" >> "$OUT"
+                rm -f "$tmpf"
+                echo -n "."
+            done
+            echo ""
+        done
+    done
+done
+
+log "Overhead medido. Resultados en: $OUT"
+log "Analizando..."
+
+OUT="$OUT" python3 - <<'PYEOF'
+import csv, statistics, os, sys
+
+path = os.environ['OUT']
+rows = list(csv.DictReader(open(path)))
+
+# Agrupar por (workload, intensidad, mode) y promediar throughput
+groups = {}
+for r in rows:
+    key = (r['workload'], r['intensity'], r['mode'])
+    try:
+        t = float(r['throughput'])
+    except ValueError:
+        continue
+    groups.setdefault(key, []).append(t)
+
+print(f"\n{'Workload':<14} {'Inten':>5} {'Modo':<14} "
+      f"{'Throughput media':>18} {'std':>10}")
+print("-" * 72)
+for k in sorted(groups):
+    vals = groups[k]
+    m = statistics.mean(vals)
+    s = statistics.stdev(vals) if len(vals) > 1 else 0.0
+    print(f"{k[0]:<14} {k[1]:>5} {k[2]:<14} {m:>18.1f} {s:>10.2f}")
+
+# Calcular % overhead = (no_sampler - with_sampler) / no_sampler * 100
+print(f"\n{'Workload':<14} {'Inten':>5} {'Overhead % (caída de throughput)':>42}")
+print("-" * 72)
+workloads = sorted({(r['workload'], r['intensity']) for r in rows})
+for wl, inten in workloads:
+    base = groups.get((wl, inten, 'no_sampler'),    [])
+    inst = groups.get((wl, inten, 'with_sampler'),  [])
+    if not base or not inst:
+        continue
+    mb, mi = statistics.mean(base), statistics.mean(inst)
+    overhead = (mb - mi) / mb * 100 if mb > 0 else float('nan')
+    print(f"{wl:<14} {inten:>5} {overhead:>42.2f}")
+PYEOF

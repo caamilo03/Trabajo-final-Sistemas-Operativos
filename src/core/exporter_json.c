@@ -3,6 +3,8 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <stdarg.h>
+#include <stdlib.h>
 
 /* Helper: escribe en buf+offset si hay espacio; retorna bytes escritos */
 static int jw(char *buf, size_t bufsz, size_t off, const char *fmt, ...)

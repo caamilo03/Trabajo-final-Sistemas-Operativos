@@ -2,6 +2,7 @@ add_executable(perfanalyzer_server
     main.c
     http.c
     routes.c
+    dashboard.c
 )
 
 target_include_directories(perfanalyzer_server PRIVATE

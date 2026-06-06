@@ -1,39 +1,50 @@
-version: "3.9"
-
-x-app-base: &app-base
-  build:
-    context: ..
-    dockerfile: docker/Dockerfile.app
-  ports:
-    - "8080:8080"
-  read_only: false
-  security_opt:
-    - no-new-privileges:true
+# docker-compose.yml — perfiles de prueba para perfanalyzer
+#
+# Los límites de recursos (cpus, mem_limit) usan la forma "standalone"
+# de docker-compose v2. La sección 'deploy.resources' solo aplica en Swarm.
+#
+# Uso:
+#   docker compose --profile baseline  up --build
+#   docker compose --profile cpu-limit up --build
+#   docker compose --profile mem-limit up --build
 
 services:
 
-  # Perfil 1: sin límites de recursos
+  # ── Perfil 1: sin límites de recursos ──────────────────────────────────────
   baseline:
-    <<: *app-base
     container_name: perf_baseline
     profiles: ["baseline"]
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    ports:
+      - "8080:8080"
+    security_opt:
+      - no-new-privileges:true
 
-  # Perfil 2: limitado a 1 vCPU
+  # ── Perfil 2: limitado a 1 vCPU ────────────────────────────────────────────
   cpu-limit:
-    <<: *app-base
     container_name: perf_cpu_limit
     profiles: ["cpu-limit"]
-    deploy:
-      resources:
-        limits:
-          cpus: "1.0"
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    ports:
+      - "8081:8080"
+    cpus: 1.0
+    security_opt:
+      - no-new-privileges:true
 
-  # Perfil 3: limitado a 512 MiB de memoria
+  # ── Perfil 3: limitado a 512 MiB ───────────────────────────────────────────
   mem-limit:
-    <<: *app-base
     container_name: perf_mem_limit
     profiles: ["mem-limit"]
-    deploy:
-      resources:
-        limits:
-          memory: 512m
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.app
+    ports:
+      - "8082:8080"
+    mem_limit: 512m
+    memswap_limit: 512m
+    security_opt:
+      - no-new-privileges:true

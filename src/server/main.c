@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "http.h"
 #include "routes.h"
-#include "perf.h"
+#include "perf_internal.h"  /* acceso a has_cgroup y cg_path del ctx */
 
 #include <stdio.h>
 #include <stdlib.h>

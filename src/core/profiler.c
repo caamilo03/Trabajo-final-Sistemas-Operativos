@@ -1,4 +1,5 @@
 #define _POSIX_C_SOURCE 200809L
+#define _GNU_SOURCE              /* necesario para RUSAGE_THREAD */
 #include "perf_internal.h"
 
 #include <string.h>
@@ -40,18 +41,27 @@ probe_entry_t *probe_table_get_or_create(probe_table_t *t, const char *name)
     e->max_us    = 0.0;
     e->res_count = 0;
 
+    /* Semilla derivada del nombre + dirección para que cada entrada tenga
+     * un RNG independiente (rand_r es thread-safe; rand() no lo es). */
+    unsigned seed = (unsigned)(uintptr_t)e;
+    for (const char *p = name; *p; p++) seed = seed * 31u + (unsigned)*p;
+    e->rng_state = seed ? seed : 1;
+
     pthread_mutex_unlock(&t->global_mu);
     return e;
 }
 
-/* Reservoir sampling de Vitter (Algorithm R) para percentiles online */
+/* Reservoir sampling de Vitter (Algorithm R) para percentiles online.
+ * Llamado bajo e->mu, por lo que rng_state está protegido por el mutex. */
 static void reservoir_add(probe_entry_t *e, double val)
 {
     if (e->res_count < RESERVOIR_SIZE) {
         e->reservoir[e->res_count++] = val;
     } else {
-        /* Reemplaza aleatoriamente con probabilidad RESERVOIR_SIZE / count */
-        size_t j = (size_t)rand() % (e->count);  /* count ya incrementado */
+        /* Reemplaza aleatoriamente con probabilidad RESERVOIR_SIZE / count.
+         * count ya está incrementado, así que count >= RESERVOIR_SIZE+1. */
+        unsigned r = (unsigned)rand_r(&e->rng_state);
+        size_t j = (size_t)r % (size_t)e->count;
         if (j < RESERVOIR_SIZE)
             e->reservoir[j] = val;
     }
@@ -125,14 +135,18 @@ perf_probe_t perf_probe_begin(perf_ctx_t *ctx, const char *name)
     p.name = name;
     clock_gettime(CLOCK_MONOTONIC_RAW, &p.t0);
 
+    /* Solo getrusage para tiempo CPU del hilo. Evitamos perf_sample()
+     * (que abre 4-5 archivos /proc) para que el costo por PROBE sea
+     * del orden de µs y no de decenas de µs. La memoria delta se lee
+     * con un sampler_mem_read ligero (un solo archivo). */
     struct rusage ru;
     getrusage(RUSAGE_THREAD, &ru);
     p.utime0_us = (uint64_t)(ru.ru_utime.tv_sec * 1000000LL + ru.ru_utime.tv_usec);
     p.stime0_us = (uint64_t)(ru.ru_stime.tv_sec * 1000000LL + ru.ru_stime.tv_usec);
 
-    perf_sample_t snap;
-    if (perf_sample(ctx, &snap) == PERF_OK)
-        p.mem0_kb = snap.mem_rss_kb;
+    mem_snapshot_t m;
+    if (sampler_mem_read(&ctx->cfg, &m) == PERF_OK)
+        p.mem0_kb = m.rss_kb;
 
     return p;
 }
@@ -154,9 +168,9 @@ void perf_probe_end(perf_probe_t *p)
     double cpu_us = (double)((utime1 + stime1) - (p->utime0_us + p->stime0_us));
 
     double mem_delta_kb = 0.0;
-    perf_sample_t snap;
-    if (perf_sample(p->ctx, &snap) == PERF_OK)
-        mem_delta_kb = (double)snap.mem_rss_kb - (double)p->mem0_kb;
+    mem_snapshot_t m;
+    if (sampler_mem_read(&p->ctx->cfg, &m) == PERF_OK)
+        mem_delta_kb = (double)m.rss_kb - (double)p->mem0_kb;
 
     probe_entry_t *entry = probe_table_get_or_create(&p->ctx->probes, p->name);
     if (entry)

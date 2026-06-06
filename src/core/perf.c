@@ -42,6 +42,7 @@ perf_ctx_t *perf_init(const perf_config_t *cfg)
 
     ring_init(&ctx->ring);
     probe_table_init(&ctx->probes);
+    pthread_mutex_init(&ctx->sample_mu, NULL);
 
     /* Intentar detectar cgroup v2 */
     perf_source_t src = ctx->cfg.source;
@@ -67,6 +68,7 @@ void perf_shutdown(perf_ctx_t *ctx)
         ctx->sampler_running = 0;
         pthread_join(ctx->sampler_thread, NULL);
     }
+    pthread_mutex_destroy(&ctx->sample_mu);
     free(ctx);
 }
 
@@ -83,12 +85,15 @@ perf_status_t perf_sample(perf_ctx_t *ctx, perf_sample_t *out)
     if (st == PERF_OK) {
         out->utime_us = cpu_snap.utime_ticks * 1000000ULL / cpu_snap.ticks_per_sec;
         out->stime_us = cpu_snap.stime_ticks * 1000000ULL / cpu_snap.ticks_per_sec;
+
+        pthread_mutex_lock(&ctx->sample_mu);
         if (ctx->prev_cpu_valid) {
             out->cpu_percent    = sampler_cpu_percent(&ctx->prev_cpu, &cpu_snap);
             out->cpu_system_pct = sampler_cpu_system_percent(&ctx->prev_cpu, &cpu_snap);
         }
         ctx->prev_cpu       = cpu_snap;
         ctx->prev_cpu_valid = 1;
+        pthread_mutex_unlock(&ctx->sample_mu);
     }
 
     mem_snapshot_t mem_snap;

@@ -36,6 +36,7 @@ add_subdirectory(src/core)
 add_subdirectory(src/server)
 add_subdirectory(src/cli)
 add_subdirectory(src/workloads)
+add_subdirectory(src/tools)
 add_subdirectory(tests)
 
 # ── Instalación ─────────────────────────────────────────────────────────────

@@ -44,9 +44,9 @@ const char *perf_strerror(perf_status_t s);
 /* ── Fuente de datos ───────────────────────────────────────────────────── */
 
 typedef enum {
-    PERF_SRC_PROC   = 0x01,  /* /proc/self/* — lectura desde el proceso */
-    PERF_SRC_CGROUP = 0x02,  /* /sys/fs/cgroup — lectura cgroup v2      */
-    PERF_SRC_AUTO   = 0x03,  /* PROC si no hay cgroup disponible        */
+    PERF_SRC_PROC   = 0x01,  /* /proc/self/...  lectura desde el proceso */
+    PERF_SRC_CGROUP = 0x02,  /* /sys/fs/cgroup  lectura cgroup v2        */
+    PERF_SRC_AUTO   = 0x03,  /* PROC si no hay cgroup disponible         */
 } perf_source_t;
 
 /* ── Configuración ─────────────────────────────────────────────────────── */
@@ -188,12 +188,19 @@ static inline void _perf_probe_cleanup(perf_probe_t *p) {
     perf_probe_end(p);
 }
 
-#define PERF_PROBE(ctx_, name_) \
-    for (perf_probe_t _probe_ \
-             __attribute__((cleanup(_perf_probe_cleanup))) \
-             = perf_probe_begin((ctx_), (name_)), _done_ = {0}; \
-         !_done_.ctx; \
-         _done_.ctx = (perf_ctx_t *)1)
+#ifdef PERF_DISABLE_SAMPLING
+  /* Modo overhead-baseline: la macro se vuelve no-op para medir el costo
+   * intrínseco del workload sin instrumentación. */
+  #define PERF_PROBE(ctx_, name_) \
+      for (int _once_ = 0; _once_ < 1; _once_++)
+#else
+  #define PERF_PROBE(ctx_, name_) \
+      for (perf_probe_t _probe_ \
+               __attribute__((cleanup(_perf_probe_cleanup))) \
+               = perf_probe_begin((ctx_), (name_)), _done_ = {0}; \
+           !_done_.ctx; \
+           _done_.ctx = (perf_ctx_t *)1)
+#endif
 
 /* ── Exportación JSON ──────────────────────────────────────────────────── */
 

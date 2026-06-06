@@ -77,8 +77,8 @@ void test_probe_percentiles(void)
     perf_probe_report(ctx, stats, &n);
 
     TEST_ASSERT_GREATER_THAN(0.0, stats[0].elapsed_us_p50);
-    TEST_ASSERT_GREATER_OR_EQUAL(stats[0].elapsed_us_p50, stats[0].elapsed_us_p50);
-    TEST_ASSERT_GREATER_OR_EQUAL(stats[0].elapsed_us_p99, stats[0].elapsed_us_p50);
+    TEST_ASSERT_GREATER_OR_EQUAL(stats[0].elapsed_us_p50, stats[0].elapsed_us_p95);
+    TEST_ASSERT_GREATER_OR_EQUAL(stats[0].elapsed_us_p95, stats[0].elapsed_us_p99);
 
     free(stats);
     perf_shutdown(ctx);

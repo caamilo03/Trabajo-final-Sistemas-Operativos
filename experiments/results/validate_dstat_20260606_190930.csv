@@ -1,0 +1,8 @@
+ts,source,cpu_pct,mem_mb
+1780772988,docker_stats,121.77,6.633
+1780772991,docker_stats,118.70,6.645
+1780772993,docker_stats,134.33,6.648
+1780772995,docker_stats,121.40,6.652
+1780772997,docker_stats,120.26,6.906
+1780772999,docker_stats,120.99,6.66
+1780773001,docker_stats,120.03,6.66

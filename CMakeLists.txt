@@ -31,6 +31,11 @@ endif()
 include_directories(${CMAKE_SOURCE_DIR}/src/core)
 include_directories(${CMAKE_SOURCE_DIR}/src/vendor)
 
+# ── Tests ───────────────────────────────────────────────────────────────────
+# enable_testing() debe invocarse en el ámbito raíz (antes de add_subdirectory)
+# para que ctest descubra los tests registrados en tests/CMakeLists.txt.
+enable_testing()
+
 # ── Subdirectorios ──────────────────────────────────────────────────────────
 add_subdirectory(src/core)
 add_subdirectory(src/server)

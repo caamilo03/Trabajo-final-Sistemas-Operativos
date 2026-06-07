@@ -1,11 +1,14 @@
+#define _POSIX_C_SOURCE 200809L   /* nanosleep */
 #include "unity.h"
 #include "perf.h"
 #include "perf_internal.h"
 
+#include <time.h>
+
 void setUp(void) {}
 void tearDown(void) {}
 
-void test_cpu_read_self(void)
+static void test_cpu_read_self(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     cpu_snapshot_t snap;
@@ -14,13 +17,13 @@ void test_cpu_read_self(void)
     TEST_ASSERT_GREATER_THAN(0, (int)snap.ticks_per_sec);
 }
 
-void test_cpu_percent_negative_on_first(void)
+static void test_cpu_percent_negative_on_first(void)
 {
     double pct = sampler_cpu_percent(NULL, NULL);
     TEST_ASSERT_LESS_OR_EQUAL(0.0, pct);
 }
 
-void test_cpu_percent_range(void)
+static void test_cpu_percent_range(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     cpu_snapshot_t s1, s2;

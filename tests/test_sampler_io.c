@@ -5,7 +5,7 @@
 void setUp(void) {}
 void tearDown(void) {}
 
-void test_io_read_ok(void)
+static void test_io_read_ok(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     io_snapshot_t snap;
@@ -14,7 +14,7 @@ void test_io_read_ok(void)
     TEST_ASSERT(st == PERF_OK || st == PERF_ERR_IO);
 }
 
-void test_io_bad_path(void)
+static void test_io_bad_path(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     cfg.proc_root = "/nonexistent_path_xyz";

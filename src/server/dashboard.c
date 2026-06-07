@@ -1,5 +1,10 @@
 #include "dashboard.h"
 
+/* El HTML embebido supera los 4095 caracteres que C99 garantiza por literal.
+ * GCC/Clang lo soportan sin problema; silenciamos el aviso pedante localmente. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Woverlength-strings"
+
 /* Dashboard HTML embebido — auto-refresca cada segundo via fetch() */
 static const char DASHBOARD_HTML[] =
 "<!DOCTYPE html>\n"
@@ -253,5 +258,7 @@ static const char DASHBOARD_HTML[] =
 "</script>\n"
 "</body>\n"
 "</html>\n";
+
+#pragma GCC diagnostic pop
 
 const char *dashboard_html(void) { return DASHBOARD_HTML; }

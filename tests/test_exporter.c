@@ -5,7 +5,7 @@
 void setUp(void) {}
 void tearDown(void) {}
 
-void test_sample_to_json_contains_keys(void)
+static void test_sample_to_json_contains_keys(void)
 {
     perf_sample_t s;
     memset(&s, 0, sizeof(s));
@@ -21,7 +21,7 @@ void test_sample_to_json_contains_keys(void)
     TEST_ASSERT_NOT_NULL(strstr(buf, "4096"));
 }
 
-void test_sample_to_json_buffer_too_small(void)
+static void test_sample_to_json_buffer_too_small(void)
 {
     perf_sample_t s;
     memset(&s, 0, sizeof(s));
@@ -30,7 +30,7 @@ void test_sample_to_json_buffer_too_small(void)
     TEST_ASSERT_EQUAL_INT(-1, n);
 }
 
-void test_series_to_json_empty(void)
+static void test_series_to_json_empty(void)
 {
     perf_series_t series = {.samples = NULL, .count = 0, .capacity = 0};
     char buf[64];

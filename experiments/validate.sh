@@ -71,16 +71,35 @@ PERF_OUT="$RESULTS/validate_perf_${TS}.csv"
 CMON_OUT="$RESULTS/validate_cmon_${TS}.csv"
 DSTAT_OUT="$RESULTS/validate_dstat_${TS}.csv"
 
-# (A) perfanalyzer /snapshot — desde el host hacia el servidor del contenedor
+# (A) perfanalyzer /snapshot — mide el CONTENEDOR completo vía cgroup v2.
+#     IMPORTANTE: usamos cg_cpu_usage_us (tiempo de CPU del cgroup entero),
+#     NO cpu_pct (que es solo del proceso servidor, idle). El %CPU se calcula
+#     como delta de uso de CPU entre dos snapshots sobre el tiempo de reloj.
+#     Así perfanalyzer mide lo mismo que container_monitor y docker stats.
 (
     echo "ts,source,cpu_pct,mem_rss_mb"
+    prev_cg=""; prev_t=""
     END=$((SECONDS + DURATION))
     while [[ $SECONDS -lt $END ]]; do
         snap=$(curl -sf "http://localhost:$PORT/snapshot" 2>/dev/null || echo '{}')
-        ts=$(date +%s)
-        cpu=$(echo "$snap" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('cpu_pct',0))" 2>/dev/null || echo 0)
-        mem=$(echo "$snap" | python3 -c "import sys,json; d=json.load(sys.stdin); print(round(d.get('mem_rss_kb',0)/1024,2))" 2>/dev/null || echo 0)
-        echo "$ts,perfanalyzer,$cpu,$mem"
+        read -r cg t mem <<< "$(echo "$snap" | python3 -c "
+import sys, json
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    print('0 0 0'); sys.exit()
+cg  = d.get('cg_cpu_usage_us', 0)
+t   = d.get('ts_sec', 0) + d.get('ts_nsec', 0) * 1e-9
+mem = round(d.get('cg_mem_current', 0) / 1048576.0, 2)
+print(cg, t, mem)
+" 2>/dev/null || echo '0 0 0')"
+        if [[ -n "$prev_cg" && "$prev_cg" != "0" ]]; then
+            cpu=$(python3 -c "
+dt = $t - $prev_t
+print(round(($cg - $prev_cg) / (dt * 1e6) * 100, 2) if dt > 0 else 0)" 2>/dev/null || echo 0)
+            echo "$(date +%s),perfanalyzer,$cpu,$mem"
+        fi
+        prev_cg="$cg"; prev_t="$t"
         sleep 1
     done
 ) > "$PERF_OUT" &

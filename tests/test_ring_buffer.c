@@ -5,7 +5,7 @@
 void setUp(void) {}
 void tearDown(void) {}
 
-void test_ring_push_drain(void)
+static void test_ring_push_drain(void)
 {
     ring_buffer_t rb;
     ring_init(&rb);
@@ -22,7 +22,7 @@ void test_ring_push_drain(void)
     TEST_ASSERT_EQUAL_UINT64(1234, dst[0].mem_rss_kb);
 }
 
-void test_ring_empty_drain(void)
+static void test_ring_empty_drain(void)
 {
     ring_buffer_t rb;
     ring_init(&rb);
@@ -32,7 +32,7 @@ void test_ring_empty_drain(void)
     TEST_ASSERT_EQUAL_UINT(0, n);
 }
 
-void test_ring_overflow_keeps_newest(void)
+static void test_ring_overflow_keeps_newest(void)
 {
     ring_buffer_t rb;
     ring_init(&rb);

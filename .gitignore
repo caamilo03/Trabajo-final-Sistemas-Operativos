@@ -9,6 +9,10 @@ compile_commands.json
 .cache/
 .clangd/
 
+# Logs y scripts temporales de verificación
+_*.log
+experiments/results/_*.py
+
 experiments/results/*.csv
 experiments/results/*.png
 experiments/results/*.html

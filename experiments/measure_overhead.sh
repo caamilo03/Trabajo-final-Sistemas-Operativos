@@ -18,10 +18,19 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 BUILD="$ROOT_DIR/build-release"
 RESULTS="$SCRIPT_DIR/results"
 
-REPLICAS=15
+REPLICAS=30
 DURATION=10
+WARMUP=2          # corridas de calentamiento descartadas por (wl,inten)
 TS=$(date +%Y%m%d_%H%M%S)
 OUT="$RESULTS/overhead_${TS}.csv"
+
+# Fijar afinidad a un núcleo reduce el ruido por migración/escalado de
+# frecuencia. Se aplica idéntico a ambos modos, así que el delta de overhead
+# permanece válido y con menor varianza.
+TASKSET=""
+if command -v taskset &>/dev/null; then
+    TASKSET="taskset -c 0"
+fi
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; NC='\033[0m'
 log() { echo -e "${GREEN}[overhead]${NC} $*"; }
@@ -53,27 +62,49 @@ for wl in cpu_stress mem_stress io_stress; do
     [[ -x "$BUILD/src/workloads/${wl}_nosampler" ]]  || die "Falta ${wl}_nosampler. Ejecuta 'make release'."
 done
 
+# Ejecuta una corrida de un modo y registra (si record=1).
+run_one() {
+    local wl="$1" inten="$2" mode="$3" rep="$4" record="$5"
+    local bin
+    if [[ "$mode" == "with_sampler" ]]; then
+        bin="$BUILD/src/workloads/$wl"
+    else
+        bin="$BUILD/src/workloads/${wl}_nosampler"
+    fi
+    local tmpf; tmpf=$(mktemp)
+    $TASKSET "$bin" --duration "$DURATION" --intensity "$inten" \
+        > "$tmpf" 2>/dev/null
+    if [[ "$record" == "1" ]]; then
+        local vals; vals=$(parse_output "$tmpf")
+        echo "$wl,$inten,$mode,$rep,$vals" >> "$OUT"
+    fi
+    rm -f "$tmpf"
+}
+
 for wl in cpu_stress mem_stress io_stress; do
     for inten in 1 2; do
-        for mode in with_sampler no_sampler; do
-            if [[ "$mode" == "with_sampler" ]]; then
-                bin="$BUILD/src/workloads/$wl"
-            else
-                bin="$BUILD/src/workloads/${wl}_nosampler"
-            fi
+        log "── $wl inten=$inten (warmup=$WARMUP, n=$REPLICAS, orden aleatorizado) ──"
 
-            log "── $wl inten=$inten mode=$mode ──"
-            for rep in $(seq 1 "$REPLICAS"); do
-                tmpf=$(mktemp)
-                "$bin" --duration "$DURATION" --intensity "$inten" \
-                    > "$tmpf" 2>/dev/null
-                vals=$(parse_output "$tmpf")
-                echo "$wl,$inten,$mode,$rep,$vals" >> "$OUT"
-                rm -f "$tmpf"
-                echo -n "."
-            done
-            echo ""
+        # Calentamiento (no registrado): estabiliza caché y frecuencia de CPU
+        for ((w=0; w<WARMUP; w++)); do
+            run_one "$wl" "$inten" with_sampler 0 0
+            run_one "$wl" "$inten" no_sampler   0 0
         done
+
+        # Réplicas intercaladas con orden aleatorio por réplica: ambos modos
+        # sufren por igual cualquier deriva térmica, eliminando el sesgo
+        # sistemático que daba "overhead negativo".
+        for rep in $(seq 1 "$REPLICAS"); do
+            if (( RANDOM % 2 )); then
+                run_one "$wl" "$inten" with_sampler "$rep" 1
+                run_one "$wl" "$inten" no_sampler   "$rep" 1
+            else
+                run_one "$wl" "$inten" no_sampler   "$rep" 1
+                run_one "$wl" "$inten" with_sampler "$rep" 1
+            fi
+            echo -n "."
+        done
+        echo ""
     done
 done
 
@@ -105,16 +136,30 @@ for k in sorted(groups):
     s = statistics.stdev(vals) if len(vals) > 1 else 0.0
     print(f"{k[0]:<14} {k[1]:>5} {k[2]:<14} {m:>18.1f} {s:>10.2f}")
 
-# Calcular % overhead = (no_sampler - with_sampler) / no_sampler * 100
-print(f"\n{'Workload':<14} {'Inten':>5} {'Overhead % (caída de throughput)':>42}")
+# Overhead % = (no_sampler - with_sampler) / no_sampler * 100, con IC 95%.
+# SE de la diferencia de medias (muestras independientes): sqrt(s1^2/n1 + s2^2/n2).
+import math
+print(f"\n{'Workload':<14} {'Inten':>5} {'Overhead %':>12} {'IC95 %':>20} {'¿signif?':>10}")
 print("-" * 72)
 workloads = sorted({(r['workload'], r['intensity']) for r in rows})
 for wl, inten in workloads:
     base = groups.get((wl, inten, 'no_sampler'),    [])
     inst = groups.get((wl, inten, 'with_sampler'),  [])
-    if not base or not inst:
+    if len(base) < 2 or len(inst) < 2:
         continue
     mb, mi = statistics.mean(base), statistics.mean(inst)
-    overhead = (mb - mi) / mb * 100 if mb > 0 else float('nan')
-    print(f"{wl:<14} {inten:>5} {overhead:>42.2f}")
+    sb, si = statistics.stdev(base), statistics.stdev(inst)
+    if mb <= 0:
+        continue
+    overhead = (mb - mi) / mb * 100
+    # SE de (mb - mi), propagada a porcentaje dividiendo por mb
+    se_diff = math.sqrt(sb*sb/len(base) + si*si/len(inst))
+    se_pct  = se_diff / mb * 100
+    lo, hi  = overhead - 1.96*se_pct, overhead + 1.96*se_pct
+    signif  = "sí" if (lo > 0 or hi < 0) else "no (~0)"
+    print(f"{wl:<14} {inten:>5} {overhead:>11.2f}% "
+          f"[{lo:>7.2f}, {hi:>7.2f}] {signif:>10}")
+
+print("\nNota: 'no (~0)' significa que el IC 95% incluye cero, es decir el")
+print("overhead del sampler no es estadísticamente distinguible de cero.")
 PYEOF

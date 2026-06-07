@@ -1,16 +1,18 @@
+#define _POSIX_C_SOURCE 200809L   /* nanosleep */
 #include "unity.h"
 #include "perf.h"
 #include "perf_internal.h"
 
 #include <time.h>
 #include <string.h>
+#include <stdlib.h>
 
 void setUp(void) {}
 void tearDown(void) {}
 
 static perf_ctx_t *ctx = NULL;
 
-void test_probe_begin_end(void)
+static void test_probe_begin_end(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     ctx = perf_init(&cfg);
@@ -38,7 +40,7 @@ void test_probe_begin_end(void)
     perf_shutdown(ctx);
 }
 
-void test_probe_reset(void)
+static void test_probe_reset(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     ctx = perf_init(&cfg);
@@ -58,7 +60,7 @@ void test_probe_reset(void)
     perf_shutdown(ctx);
 }
 
-void test_probe_percentiles(void)
+static void test_probe_percentiles(void)
 {
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
     ctx = perf_init(&cfg);

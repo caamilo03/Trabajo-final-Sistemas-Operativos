@@ -97,6 +97,7 @@ int main(int argc, char *argv[])
     int    duration_s = 10;
     size_t file_mb    = 32;
     int    intensity  = 1;
+    int    no_sampler = 0;
     const char *tmpfile = "/tmp/perf_io_stress.bin";
 
     for (int i = 1; i < argc; i++) {
@@ -106,16 +107,17 @@ int main(int argc, char *argv[])
             intensity = atoi(argv[++i]);
         else if (strcmp(argv[i], "--tmpfile") == 0 && i+1 < argc)
             tmpfile = argv[++i];
+        else if (strcmp(argv[i], "--no-sampler") == 0)
+            no_sampler = 1;
     }
     if (intensity >= 2) file_mb = 128;
 
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
+    cfg.disable_sampling = no_sampler;
     perf_ctx_t *ctx = perf_init(&cfg);
     if (!ctx) { fprintf(stderr, "perf_init falló\n"); return 1; }
 
-#ifndef PERF_DISABLE_SAMPLING
-    perf_start_recording(ctx);
-#endif
+    perf_start_recording(ctx);  /* no-op si --no-sampler */
 
     struct timespec t_end;
     clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -143,9 +145,7 @@ int main(int argc, char *argv[])
     unlink(tmpfile);
 
     perf_series_t series = {0};
-#ifndef PERF_DISABLE_SAMPLING
-    perf_stop_recording(ctx, &series);
-#endif
+    perf_stop_recording(ctx, &series);  /* serie vacía si --no-sampler */
 
     printf("workload,io_stress\n");
     printf("iters,%llu\n",     (unsigned long long)iters);

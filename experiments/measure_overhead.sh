@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # measure_overhead.sh — Cuantifica el overhead de libperfanalyzer
 #
-# Ejecuta cada workload N réplicas en dos modos:
-#   - with_sampler:   PERF_PROBE activo + sampler de fondo
-#   - no_sampler:     mismo binario compilado con -DPERF_DISABLE_SAMPLING
-#                     (la macro PERF_PROBE se vuelve no-op)
-# Compara el throughput entre ambos para reportar el % de overhead.
+# Ejecuta cada workload N réplicas en dos modos, con EL MISMO binario:
+#   - with_sampler:   sampling activo (PERF_PROBE + sampler de fondo)
+#   - no_sampler:     --no-sampler desactiva el sampling en runtime
+# Al ser el mismo binario, el overhead medido aísla el costo del muestreo
+# sin artefactos de compilación. Compara el throughput entre ambos modos.
 #
 # Uso:
 #   chmod +x experiments/measure_overhead.sh
@@ -56,23 +56,22 @@ parse_output() {
     echo "${throughput},${cpu_avg}"
 }
 
-# Verificar binarios
+# Verificar binarios (un solo binario por workload; el modo se elige en runtime)
 for wl in cpu_stress mem_stress io_stress; do
-    [[ -x "$BUILD/src/workloads/${wl}" ]]            || die "Falta ${wl}. Ejecuta 'make release'."
-    [[ -x "$BUILD/src/workloads/${wl}_nosampler" ]]  || die "Falta ${wl}_nosampler. Ejecuta 'make release'."
+    [[ -x "$BUILD/src/workloads/${wl}" ]] || die "Falta ${wl}. Ejecuta 'make release'."
 done
 
 # Ejecuta una corrida de un modo y registra (si record=1).
+# AMBOS modos usan EL MISMO binario; 'no_sampler' añade --no-sampler para
+# desactivar el sampling en runtime. Así el overhead medido aísla el costo
+# del muestreo, sin diferencias de compilación entre binarios.
 run_one() {
     local wl="$1" inten="$2" mode="$3" rep="$4" record="$5"
-    local bin
-    if [[ "$mode" == "with_sampler" ]]; then
-        bin="$BUILD/src/workloads/$wl"
-    else
-        bin="$BUILD/src/workloads/${wl}_nosampler"
-    fi
+    local bin="$BUILD/src/workloads/$wl"
+    local extra=""
+    [[ "$mode" == "no_sampler" ]] && extra="--no-sampler"
     local tmpf; tmpf=$(mktemp)
-    $TASKSET "$bin" --duration "$DURATION" --intensity "$inten" \
+    $TASKSET "$bin" --duration "$DURATION" --intensity "$inten" $extra \
         > "$tmpf" 2>/dev/null
     if [[ "$record" == "1" ]]; then
         local vals; vals=$(parse_output "$tmpf")

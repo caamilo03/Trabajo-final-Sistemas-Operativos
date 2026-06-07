@@ -133,6 +133,16 @@ perf_probe_t perf_probe_begin(perf_ctx_t *ctx, const char *name)
     memset(&p, 0, sizeof(p));
     p.ctx  = ctx;
     p.name = name;
+
+    /* Sampling desactivado en runtime: marcamos la sonda como deshabilitada
+     * y retornamos de inmediato. El cuerpo del bloque PERF_PROBE igual se
+     * ejecuta una vez; perf_probe_end no registrará nada. Esto da una línea
+     * base "instrumentada pero inerte" con el MISMO binario. */
+    if (!ctx || !ctx->sampling_enabled) {
+        p.disabled = 1;
+        return p;
+    }
+
     clock_gettime(CLOCK_MONOTONIC_RAW, &p.t0);
 
     /* Solo getrusage para tiempo CPU del hilo. Evitamos perf_sample()
@@ -153,7 +163,7 @@ perf_probe_t perf_probe_begin(perf_ctx_t *ctx, const char *name)
 
 void perf_probe_end(perf_probe_t *p)
 {
-    if (!p || !p->ctx || !p->name) return;
+    if (!p || !p->ctx || !p->name || p->disabled) return;
 
     struct timespec t1;
     clock_gettime(CLOCK_MONOTONIC_RAW, &t1);

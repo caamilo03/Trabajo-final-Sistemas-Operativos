@@ -114,21 +114,23 @@ int main(int argc, char *argv[])
 {
     int duration_s  = 10;
     int intensity   = 1;  /* 1=low, 2=high */
+    int no_sampler  = 0;  /* --no-sampler: desactiva sampling en runtime */
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--duration") == 0 && i+1 < argc)
             duration_s = atoi(argv[++i]);
         else if (strcmp(argv[i], "--intensity") == 0 && i+1 < argc)
             intensity = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--no-sampler") == 0)
+            no_sampler = 1;
     }
 
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
+    cfg.disable_sampling = no_sampler;
     perf_ctx_t *ctx = perf_init(&cfg);
     if (!ctx) { fprintf(stderr, "perf_init falló\n"); return 1; }
 
-#ifndef PERF_DISABLE_SAMPLING
-    perf_start_recording(ctx);
-#endif
+    perf_start_recording(ctx);  /* no-op si --no-sampler */
 
     int mat_n = (intensity >= 2) ? MAT_N : MAT_N / 2;
     double *A = calloc((size_t)(mat_n * mat_n), sizeof(double));
@@ -174,9 +176,7 @@ int main(int argc, char *argv[])
     }
 
     perf_series_t series = {0};
-#ifndef PERF_DISABLE_SAMPLING
-    perf_stop_recording(ctx, &series);
-#endif
+    perf_stop_recording(ctx, &series);  /* serie vacía si --no-sampler */
 
     /* Imprimir resumen a stdout (CSV) */
     printf("workload,cpu_stress\n");
@@ -191,7 +191,7 @@ int main(int argc, char *argv[])
         printf("cpu_pct_avg,%.2f\n", cpu_sum / (double)series.count);
     }
 
-    /* Reporte de sondas (vacío si PERF_DISABLE_SAMPLING) */
+    /* Reporte de sondas (vacío si se corrió con --no-sampler) */
     size_t np = 0;
     perf_probe_report(ctx, NULL, &np);
     if (np > 0) {

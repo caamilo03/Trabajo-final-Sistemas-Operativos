@@ -119,6 +119,7 @@ struct perf_ctx {
     perf_config_t   cfg;
     char            cg_path[512];
     int             has_cgroup;
+    int             sampling_enabled;   /* 0 si cfg.disable_sampling */
 
     /* Sampler de fondo */
     pthread_t       sampler_thread;

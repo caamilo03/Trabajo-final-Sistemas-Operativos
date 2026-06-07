@@ -40,6 +40,8 @@ perf_ctx_t *perf_init(const perf_config_t *cfg)
     if (ctx->cfg.sample_period_ms < 10)
         ctx->cfg.sample_period_ms = 10;
 
+    ctx->sampling_enabled = ctx->cfg.disable_sampling ? 0 : 1;
+
     ring_init(&ctx->ring);
     probe_table_init(&ctx->probes);
     pthread_mutex_init(&ctx->sample_mu, NULL);
@@ -147,6 +149,9 @@ static void *sampler_thread_fn(void *arg)
 perf_status_t perf_start_recording(perf_ctx_t *ctx)
 {
     if (!ctx) return PERF_ERR_INVAL;
+    /* Si el sampling está desactivado en runtime, no arrancamos el hilo.
+     * Se devuelve OK para que el código del workload no necesite ramas. */
+    if (!ctx->sampling_enabled) return PERF_OK;
     if (ctx->sampler_running) return PERF_ERR_BUSY;
 
     ctx->sampler_running = 1;
@@ -160,6 +165,11 @@ perf_status_t perf_start_recording(perf_ctx_t *ctx)
 perf_status_t perf_stop_recording(perf_ctx_t *ctx, perf_series_t *out)
 {
     if (!ctx) return PERF_ERR_INVAL;
+    /* Sampling desactivado: serie vacía, sin error (simetría con start). */
+    if (!ctx->sampling_enabled) {
+        if (out) { out->samples = NULL; out->count = 0; out->capacity = 0; }
+        return PERF_OK;
+    }
     if (!ctx->sampler_running) return PERF_ERR_NOT_RUNNING;
 
     ctx->sampler_running = 0;

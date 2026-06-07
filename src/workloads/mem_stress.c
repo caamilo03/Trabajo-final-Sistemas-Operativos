@@ -30,23 +30,25 @@ int main(int argc, char *argv[])
     int    duration_s = 10;
     size_t alloc_mb   = 64;   /* low intensity */
     int    intensity  = 1;
+    int    no_sampler = 0;
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--duration") == 0 && i+1 < argc)
             duration_s = atoi(argv[++i]);
         else if (strcmp(argv[i], "--intensity") == 0 && i+1 < argc)
             intensity = atoi(argv[++i]);
+        else if (strcmp(argv[i], "--no-sampler") == 0)
+            no_sampler = 1;
     }
 
     if (intensity >= 2) alloc_mb = 256;
 
     perf_config_t cfg = PERF_CONFIG_DEFAULT;
+    cfg.disable_sampling = no_sampler;
     perf_ctx_t *ctx = perf_init(&cfg);
     if (!ctx) { fprintf(stderr, "perf_init falló\n"); return 1; }
 
-#ifndef PERF_DISABLE_SAMPLING
-    perf_start_recording(ctx);
-#endif
+    perf_start_recording(ctx);  /* no-op si --no-sampler */
 
     struct timespec t_end;
     clock_gettime(CLOCK_MONOTONIC, &t_end);
@@ -86,9 +88,7 @@ int main(int argc, char *argv[])
     }
 
     perf_series_t series = {0};
-#ifndef PERF_DISABLE_SAMPLING
-    perf_stop_recording(ctx, &series);
-#endif
+    perf_stop_recording(ctx, &series);  /* serie vacía si --no-sampler */
 
     printf("workload,mem_stress\n");
     printf("alloc_iters,%llu\n", (unsigned long long)alloc_iters);

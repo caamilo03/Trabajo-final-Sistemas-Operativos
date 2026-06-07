@@ -57,6 +57,9 @@ typedef struct {
     const char   *proc_root;          /* override de /proc (tests)       */
     const char   *cgroup_root;        /* override de /sys/fs/cgroup      */
     int           pid;                /* 0 = proceso propio              */
+    int           disable_sampling;   /* 1 = desactiva sampler y probes  */
+                                      /*     en runtime (para medir       */
+                                      /*     overhead con el MISMO binario)*/
 } perf_config_t;
 
 #define PERF_CONFIG_DEFAULT { \
@@ -65,6 +68,7 @@ typedef struct {
     .proc_root        = NULL,          \
     .cgroup_root      = NULL,          \
     .pid              = 0,             \
+    .disable_sampling = 0,             \
 }
 
 /* ── Tipos de muestra ──────────────────────────────────────────────────── */
@@ -143,6 +147,7 @@ typedef struct {
     uint64_t         utime0_us;
     uint64_t         stime0_us;
     uint64_t         mem0_kb;
+    int              disabled;   /* 1 = sampling off: end() no registra nada */
 } perf_probe_t;
 
 /** Inicia una medición asociada a name. */
@@ -188,19 +193,17 @@ static inline void _perf_probe_cleanup(perf_probe_t *p) {
     perf_probe_end(p);
 }
 
-#ifdef PERF_DISABLE_SAMPLING
-  /* Modo overhead-baseline: la macro se vuelve no-op para medir el costo
-   * intrínseco del workload sin instrumentación. */
-  #define PERF_PROBE(ctx_, name_) \
-      for (int _once_ = 0; _once_ < 1; _once_++)
-#else
-  #define PERF_PROBE(ctx_, name_) \
-      for (perf_probe_t _probe_ \
-               __attribute__((cleanup(_perf_probe_cleanup))) \
-               = perf_probe_begin((ctx_), (name_)), _done_ = {0}; \
-           !_done_.ctx; \
-           _done_.ctx = (perf_ctx_t *)1)
-#endif
+/* La instrumentación SIEMPRE se compila igual (mismo código máquina). El
+ * sampling se activa/desactiva en runtime vía cfg.disable_sampling, de modo
+ * que medir el overhead compara el MISMO binario consigo mismo (sin artefactos
+ * de compilación). Cuando está desactivado, perf_probe_begin/end hacen
+ * early-return y el cuerpo del bloque se ejecuta una sola vez igual. */
+#define PERF_PROBE(ctx_, name_) \
+    for (perf_probe_t _probe_ \
+             __attribute__((cleanup(_perf_probe_cleanup))) \
+             = perf_probe_begin((ctx_), (name_)), _done_ = {0}; \
+         !_done_.ctx; \
+         _done_.ctx = (perf_ctx_t *)1)
 
 /* ── Exportación JSON ──────────────────────────────────────────────────── */
 
